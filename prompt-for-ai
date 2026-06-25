@@ -1,0 +1,40 @@
+Paid RAF Table — Member Month Grain
+Create a SQL query that builds a paid RAF (Risk Adjustment Factor) table at the member-month grain for a PACE organization's dual-eligible population. The query should join enrollment data from a census table to RAF values derived from MMR (Monthly Membership Report) data.
+
+Source Tables
+Two source tables are required:
+A census table that contains one row per member per month, with columns for report month, payment year, MBI, member ID, enrollment date, and care center. Filter to dual-eligible members only. This table is the spine of the output and the source of truth for enrollment.
+An MMR table that contains CMS payment data with columns including MedicareId, ARC code, PaymentDate (stored as YYYYMM varchar), AdjStartDate, AdjEndDate, RAFPartA, RAFPartB, and others. Filter to ARC codes NULL, '02', '25', and '26' only. Derive the RAF score by coalescing RAFPartA and RAFPartB.
+
+Output Grain
+One row per member per month, with three annual RAF columns appended: Initial, Midyear, and Final. The RAF values are annual — calculated once per member per year and repeated across all months for that member-year.
+
+Initial RAF
+
+Applies only to members who were enrolled for at least one month between January and June of the payment year, determined from the census table (not MMR)
+Pull the RAF value from MMR rows where ARC code is NULL or '02' and PaymentDate falls in January–June of the payment year
+If no January–June enrollment exists in census → NULL
+Mid-year enrollees (first enrollment after June) should always be NULL for Initial, even if they have ARC NULL/'02' MMR rows, because their rates reflect mid-year pricing not the initial sweep
+
+
+Midyear RAF
+
+For January–June enrollees: if CMS issued an ARC '26' adjustment for the year and the RAF changed from Initial, use the '26' RAF. If no '26' row exists or the RAF is unchanged, carry forward Initial.
+For mid-year enrollees (enrolled after June, so Initial is NULL): populate their earliest MMR row for the year as their entry rate. This is the first rate CMS ever assigned them, so Midyear is the correct home for it.
+Suppress Midyear (return NULL) for any payment year where the current date has not yet reached July 1st of that year, since mid-year adjustments are not issued until July at the earliest
+
+
+Final RAF
+
+For all members: if CMS issued an ARC '25' adjustment (paid in June of the following year) and the RAF changed from Midyear, use the '25' RAF. If no '25' row exists or the RAF is unchanged, carry forward Midyear.
+The '25' rows are identified by ARC code '25', PaymentDate month = June, and PaymentDate year = payment year + 1
+Suppress Final (return NULL) for any payment year where the current date has not yet reached June 1st of payment year + 1, since the final sweep has not yet been issued
+
+
+Additional Notes (customize these notes based on your schema) - here are mine:
+
+PaymentDate in the MMR table is stored as a 6-character varchar in YYYYMM format — extract year and month using string functions rather than date functions
+AdjStartDate is a proper date column and can be used to derive the adjustment year via YEAR()
+MBI matching should be case-insensitive; apply UPPER and TRIM on both sides of the join
+When multiple MMR rows exist for the same member and year within the same ARC category, use the most recent PaymentDate as the authoritative row — except for mid-year enrollee entry rates, where the earliest PaymentDate should be used
+Use GETDATE() for all date-based suppression logic so the query remains correct as time progresses without manual updates
